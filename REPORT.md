@@ -17,3 +17,40 @@ You can extract this information using **bitwise AND (`&`)** with predefined mac
 if (st.st_mode & S_IFDIR)  // Checks if it's a directory
 if (st.st_mode & S_IRUSR)  // Checks if the owner has read permission
 if (st.st_mode & S_IXGRP)  // Checks if the group has execute permission
+
+
+## Feature 3 – Column Display (v1.2.0)
+
+### Objective
+
+Implement a column display mode for the `ls` program to neatly organize filenames in columns (displaying **down then across**) similar to the original `ls` behavior.
+
+### Implementation Details
+
+* **Source file:** `src/ls-v1.2.0.c`
+* **Branch:** `feature-column-display-v1.2.0`
+* **Functions Used:**
+
+  * `opendir()`, `readdir()` for reading directory entries.
+  * Calculated maximum filename width for proper column spacing.
+  * Used `printf()` for aligned output in multiple columns.
+* Display order: items fill down each column, then move across to the next column.
+
+### Testing
+
+Commands tested:
+
+```bash
+./bin/ls
+./bin/ls -l
+```
+
+Output now prints files in columns when the terminal width allows, improving readability.
+
+### Commit & Tag
+
+* Commit message:
+  `feat: implement column display mode (down then across)`
+* Version tag: **v1.2.0**
+* Merged branch: `feature-column-display-v1.2.0` → `main`
+
