@@ -1,195 +1,116 @@
-#define _POSIX_C_SOURCE 200112L
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <errno.h>
 
-enum display_mode { DEFAULT_VERTICAL, LONG_LISTING, HORIZONTAL };
+// Display mode flags
+enum { DEFAULT, LONG_LIST, HORIZONTAL };
+int display_mode = DEFAULT;
+int recursive_flag = 0; // new for -R
 
-// ------------------- ANSI Color Codes -------------------
-#define COLOR_RESET     "\033[0m"
-#define COLOR_BLUE      "\033[0;34m"
-#define COLOR_GREEN     "\033[0;32m"
-#define COLOR_RED       "\033[0;31m"
-#define COLOR_PINK      "\033[0;35m"
-#define COLOR_REVERSE   "\033[7m"
+// Color codes from v1.5.0
+#define COLOR_RESET "\033[0m"
+#define COLOR_BLUE  "\033[0;34m"
+#define COLOR_GREEN "\033[0;32m"
+#define COLOR_RED   "\033[0;31m"
+#define COLOR_PINK  "\033[0;35m"
+#define COLOR_REV   "\033[7m"
 
-// ------------------- Function prototypes -------------------
-void print_vertical(char **files, int count);
-void print_long_listing(char **files, int count);
-void print_horizontal(char **files, int count);
-void do_ls(int n_files, char **files, enum display_mode mode);
-void print_colored(const char *filename, mode_t st_mode);
-
-// Comparison function for qsort
-int cmp_str(const void *a, const void *b) {
-    char *str1 = *(char **)a;
-    char *str2 = *(char **)b;
-    return strcmp(str1, str2);
-}
-
-// Custom strdup to avoid implicit declaration
-char *my_strdup(const char *s) {
-    size_t len = strlen(s);
-    char *p = malloc(len + 1);
-    if (!p) { perror("malloc"); exit(EXIT_FAILURE); }
-    strcpy(p, s);
-    return p;
-}
-
-// ------------------- Main -------------------
-int main(int argc, char *argv[]) {
-    enum display_mode mode = DEFAULT_VERTICAL;
-    int opt;
-
-    while ((opt = getopt(argc, argv, "lx")) != -1) {
-        switch(opt) {
-            case 'l': mode = LONG_LISTING; break;
-            case 'x': mode = HORIZONTAL; break;
-            default:
-                fprintf(stderr, "Usage: %s [-l] [-x] [file...]\n", argv[0]);
-                exit(EXIT_FAILURE);
-        }
+// Function to print a file with color based on type
+void print_file_colored(const char *path, const char *name) {
+    struct stat st;
+    if (lstat(path, &st) == -1) {
+        perror("lstat");
+        return;
     }
 
-    int n_files = argc - optind;
-    char **files;
-    int dynamic = 0;
+    if (S_ISDIR(st.st_mode)) printf(COLOR_BLUE "%s" COLOR_RESET "\n", name);
+    else if (st.st_mode & S_IXUSR) printf(COLOR_GREEN "%s" COLOR_RESET "\n", name);
+    else if (strstr(name, ".tar") || strstr(name, ".gz") || strstr(name, ".zip"))
+        printf(COLOR_RED "%s" COLOR_RESET "\n", name);
+    else if (S_ISLNK(st.st_mode)) printf(COLOR_PINK "%s" COLOR_RESET "\n", name);
+    else if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode))
+        printf(COLOR_REV "%s" COLOR_RESET "\n", name);
+    else printf("%s\n", name);
+}
 
-    if (n_files == 0) {
-        DIR *dirp = opendir(".");
-        if (!dirp) { perror("opendir"); exit(EXIT_FAILURE); }
+// Alphabetical comparison for qsort
+int cmpstring(const void *a, const void *b) {
+    const char *pa = *(const char **)a;
+    const char *pb = *(const char **)b;
+    return strcmp(pa, pb);
+}
 
-        struct dirent *dp;
-        int capacity = 64;
-        files = malloc(capacity * sizeof(char *));
-        if (!files) { perror("malloc"); exit(EXIT_FAILURE); }
+// Horizontal display (simplified)
+void horizontal_display(char **files, int n) {
+    int i;
+    for (i = 0; i < n; i++) printf("%-20s", files[i]);
+    printf("\n");
+}
 
-        n_files = 0;
-        dynamic = 1;
-
-        while ((dp = readdir(dirp)) != NULL) {
-            if (dp->d_name[0] == '.') continue; // skip hidden files
-            if (n_files >= capacity) {
-                capacity *= 2;
-                files = realloc(files, capacity * sizeof(char *));
-                if (!files) { perror("realloc"); exit(EXIT_FAILURE); }
-            }
-            files[n_files++] = my_strdup(dp->d_name);
-        }
-        closedir(dirp);
-    } else {
-        files = &argv[optind];
+// Recursive ls function
+void do_ls(const char *dirname) {
+    DIR *dir = opendir(dirname);
+    if (!dir) {
+        fprintf(stderr, "Cannot open directory '%s': %s\n", dirname, strerror(errno));
+        return;
     }
 
-    // Alphabetical sort
-    qsort(files, n_files, sizeof(char *), cmp_str);
+    printf("\n%s:\n", dirname);
+
+    struct dirent *dp;
+    char **files = NULL;
+    int n_files = 0, capacity = 16;
+    files = malloc(capacity * sizeof(char *));
+    while ((dp = readdir(dir)) != NULL) {
+        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) continue;
+        if (n_files >= capacity) files = realloc(files, capacity *= 2 * sizeof(char *));
+        files[n_files++] = strdup(dp->d_name);
+    }
+    closedir(dir);
+
+    qsort(files, n_files, sizeof(char *), cmpstring);
 
     // Display
-    do_ls(n_files, files, mode);
+    for (int i = 0; i < n_files; i++) {
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dirname, files[i]);
 
-    // Free memory if dynamically allocated
-    if (dynamic) {
-        for (int i = 0; i < n_files; i++) free(files[i]);
-        free(files);
+        if (display_mode == LONG_LIST) print_file_colored(fullpath, files[i]); // long-list
+        else if (display_mode == HORIZONTAL) horizontal_display(&files[i], 1); // horizontal
+        else print_file_colored(fullpath, files[i]); // default
     }
 
+    // Recursive call for directories
+    if (recursive_flag) {
+        for (int i = 0; i < n_files; i++) {
+            char fullpath[1024];
+            snprintf(fullpath, sizeof(fullpath), "%s/%s", dirname, files[i]);
+            struct stat st;
+            if (lstat(fullpath, &st) == 0 && S_ISDIR(st.st_mode))
+                do_ls(fullpath);
+        }
+    }
+
+    for (int i = 0; i < n_files; i++) free(files[i]);
+    free(files);
+}
+
+int main(int argc, char *argv[]) {
+    int opt;
+    while ((opt = getopt(argc, argv, "lRx")) != -1) {
+        switch (opt) {
+            case 'l': display_mode = LONG_LIST; break;
+            case 'x': display_mode = HORIZONTAL; break;
+            case 'R': recursive_flag = 1; break;
+            default: fprintf(stderr, "Usage: %s [-lRx] [dir]\n", argv[0]); exit(EXIT_FAILURE);
+        }
+    }
+
+    const char *dir = (optind < argc) ? argv[optind] : ".";
+    do_ls(dir);
     return 0;
-}
-
-// ------------------- Colored Print -------------------
-void print_colored(const char *filename, mode_t st_mode) {
-    struct stat st;
-    if (lstat(filename, &st) == -1) { perror("lstat"); return; }
-
-    const char *color = COLOR_RESET;
-
-    if (S_ISDIR(st.st_mode)) color = COLOR_BLUE;
-    else if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) color = COLOR_GREEN;
-    else if (strstr(filename, ".tar") || strstr(filename, ".gz") || strstr(filename, ".zip")) color = COLOR_RED;
-    else if (S_ISLNK(st.st_mode)) color = COLOR_PINK;
-    else if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode))
-        color = COLOR_REVERSE;
-
-    printf("%s%s%s", color, filename, COLOR_RESET);
-}
-
-// ------------------- Printing Functions -------------------
-void print_vertical(char **files, int count) {
-    int max_len = 0;
-    for (int i = 0; i < count; i++) {
-        int len = strlen(files[i]);
-        if (len > max_len) max_len = len;
-    }
-    max_len += 2;
-
-    int cols = 80 / max_len;
-    if (cols == 0) cols = 1;
-    int rows = (count + cols - 1) / cols;
-
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols; c++) {
-            int idx = c * rows + r;
-            if (idx < count) {
-                printf("%-*s", max_len, files[idx]);
-            }
-        }
-        printf("\n");
-    }
-}
-
-void print_long_listing(char **files, int count) {
-    for (int i = 0; i < count; i++) {
-        struct stat st;
-        if (stat(files[i], &st) == -1) { perror("stat"); continue; }
-        print_colored(files[i], st.st_mode);
-        printf("\n");
-    }
-}
-
-void print_horizontal(char **files, int count) {
-    struct winsize w;
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
-    int term_width = w.ws_col;
-
-    int max_len = 0;
-    for (int i = 0; i < count; i++) {
-        int len = strlen(files[i]);
-        if (len > max_len) max_len = len;
-    }
-    max_len += 2;
-
-    int pos = 0;
-    for (int i = 0; i < count; i++) {
-        print_colored(files[i], 0); // st_mode 0 just for non-long listing
-        printf("%-*s", max_len, ""); // padding
-        pos += max_len;
-        if (pos + max_len > term_width) {
-            printf("\n");
-            pos = 0;
-        }
-    }
-    if (pos != 0) printf("\n");
-}
-
-// ------------------- do_ls -------------------
-void do_ls(int n_files, char **files, enum display_mode mode) {
-    switch(mode) {
-        case LONG_LISTING:
-            print_long_listing(files, n_files);
-            break;
-        case HORIZONTAL:
-            print_horizontal(files, n_files);
-            break;
-        case DEFAULT_VERTICAL:
-        default:
-            print_vertical(files, n_files);
-            break;
-    }
 }
