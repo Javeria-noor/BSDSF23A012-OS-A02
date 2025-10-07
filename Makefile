@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -O2
-SRC = src/ls-v1.0.0.c
+SRC = src/ls-v1.1.0.c
 BINDIR = bin
 TARGET = $(BINDIR)/ls
 
