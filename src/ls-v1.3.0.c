@@ -11,12 +11,29 @@
 
 enum display_mode { DEFAULT_VERTICAL, LONG_LISTING, HORIZONTAL };
 
-// Function prototypes
+// ------------------- Function prototypes -------------------
 void print_vertical(char **files, int count);
 void print_long_listing(char **files, int count);
 void print_horizontal(char **files, int count);
 void do_ls(int n_files, char **files, enum display_mode mode);
 
+// Comparison function for qsort
+int cmp_str(const void *a, const void *b) {
+    char *str1 = *(char **)a;
+    char *str2 = *(char **)b;
+    return strcmp(str1, str2);
+}
+
+// Custom strdup to avoid implicit declaration
+char *my_strdup(const char *s) {
+    size_t len = strlen(s);
+    char *p = malloc(len + 1);
+    if (!p) { perror("malloc"); exit(EXIT_FAILURE); }
+    strcpy(p, s);
+    return p;
+}
+
+// ------------------- Main -------------------
 int main(int argc, char *argv[]) {
     enum display_mode mode = DEFAULT_VERTICAL;
     int opt;
@@ -36,27 +53,53 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Determine files to list
     int n_files = argc - optind;
     char **files;
+    int dynamic = 0;
+
     if (n_files == 0) {
-        files = malloc(sizeof(char *));
+        // Read current directory
+        DIR *dirp = opendir(".");
+        if (!dirp) { perror("opendir"); exit(EXIT_FAILURE); }
+
+        struct dirent *dp;
+        int capacity = 64;
+        files = malloc(capacity * sizeof(char *));
         if (!files) { perror("malloc"); exit(EXIT_FAILURE); }
-        files[0] = ".";
-        n_files = 1;
+
+        n_files = 0;
+        dynamic = 1;
+
+        while ((dp = readdir(dirp)) != NULL) {
+            if (dp->d_name[0] == '.') continue; // skip hidden files
+            if (n_files >= capacity) {
+                capacity *= 2;
+                files = realloc(files, capacity * sizeof(char *));
+                if (!files) { perror("realloc"); exit(EXIT_FAILURE); }
+            }
+            files[n_files++] = my_strdup(dp->d_name);
+        }
+        closedir(dirp);
     } else {
         files = &argv[optind];
     }
 
+    // Alphabetical sort
+    qsort(files, n_files, sizeof(char *), cmp_str);
+
+    // Display
     do_ls(n_files, files, mode);
 
-    if (n_files == 1 && strcmp(files[0], ".") == 0) free(files);
+    // Free memory if dynamically allocated
+    if (dynamic) {
+        for (int i = 0; i < n_files; i++) free(files[i]);
+        free(files);
+    }
 
     return 0;
 }
 
 // ------------------- Printing Functions -------------------
-
 void print_vertical(char **files, int count) {
     int max_len = 0;
     for (int i = 0; i < count; i++) {
@@ -65,7 +108,7 @@ void print_vertical(char **files, int count) {
     }
     max_len += 2;
 
-    int cols = 80 / max_len;  // default 80 chars
+    int cols = 80 / max_len;
     if (cols == 0) cols = 1;
     int rows = (count + cols - 1) / cols;
 
@@ -94,7 +137,7 @@ void print_horizontal(char **files, int count) {
         int len = strlen(files[i]);
         if (len > max_len) max_len = len;
     }
-    max_len += 2;  // padding
+    max_len += 2;
 
     int pos = 0;
     for (int i = 0; i < count; i++) {
@@ -109,7 +152,6 @@ void print_horizontal(char **files, int count) {
 }
 
 // ------------------- do_ls -------------------
-
 void do_ls(int n_files, char **files, enum display_mode mode) {
     switch(mode) {
         case LONG_LISTING:
